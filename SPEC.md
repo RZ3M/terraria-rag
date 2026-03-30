@@ -57,11 +57,23 @@ Paginate through all pages. Filter out:
 - Redirects (`ns` redirect flag)
 - User pages, talk pages, templates, modules
 - Pages with no real content (short pages < 500 chars)
+- Language variant subpages (Page/ja, Page/de, etc.)
 
 **Step 2 — Fetch page content**
 ```
 action=query&prop=revisions&rvprop=content&rvslots=main&format=json&titles=<PAGE_TITLE>
 ```
+
+**⚠️ Important — Crafting Recipes:** The MediaWiki API returns raw wikitext with
+UNEXPANDED templates like `{{recipes|result=Terra Blade}}`. Recipe ingredients are NOT
+included. Two solutions exist:
+
+- `html_fetcher.py` — Scrapling (stealthy browser) → fully rendered HTML with
+  expanded crafting trees and real item names. Best quality but requires browser.
+- `parser_html.py` — MediaWiki `action=parse&prop=text` → rendered HTML without JS.
+  Lighter weight, same recipe quality for most pages.
+
+Both need to be integrated into `run_ingestion.py` to fill in missing recipe data.
 
 ### Chunking Strategy
 
