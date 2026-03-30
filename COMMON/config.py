@@ -2,9 +2,15 @@
 COMMON/config.py — All configuration constants for the Terraria RAG system.
 
 Keep all magic numbers and settings here. No hardcoding elsewhere.
+
+API keys are loaded from .env (never committed). See .env.example for keys.
 """
 
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file (ignored by git — contains private API keys)
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Project Paths
@@ -30,7 +36,7 @@ WIKI_FORMAT = "json"
 
 # Fetch settings
 FETCH_BATCH_SIZE = 50          # pages per API request (for list=allpages)
-FETCH_REQUEST_DELAY_SEC = 0.5  # be polite; wiki.gg has rate limits
+FETCH_REQUEST_DELAY_SEC = 2.0  # be polite; wiki.gg has rate limits
 FETCH_MAX_RETRIES = 3
 FETCH_MIN_PAGE_LENGTH = 500     # skip pages shorter than this
 
@@ -103,8 +109,8 @@ DEFAULT_LLM_PROVIDER = "minimax"  # "minimax" or "openrouter"
 
 # Minimax
 MINIMAX_API_KEY = None          # set via environment variable MINIMAX_API_KEY
-MINIMAX_BASE_URL = "https://api.minimax.chat/v1"
-MINIMAX_MODEL = "MiniMax-Text-01"
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+MINIMAX_MODEL = "MiniMax-M2.7"
 MINIMAX_MAX_TOKENS = 500
 MINIMAX_TEMPERATURE = 0.7
 
@@ -121,6 +127,9 @@ OPENROUTER_TEMPERATURE = 0.7
 SYSTEM_PROMPT = """You are a helpful Terraria NPC companion. You give concise,
 spoiler-free hints that help players progress through the game. You have access
 to the Terraria wiki. Answer based ONLY on the provided context.
+
+IMPORTANT: Keep answers SHORT — 2-3 sentences maximum. Do not write long
+explanations. Do not include your reasoning. Give the hint directly.
 
 - Do NOT reveal exact crafting recipes unless the player is clearly asking
 - Suggest next steps based on the player's current game state

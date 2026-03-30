@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from COMMON.config import (
     WIKI_API_BASE,
@@ -43,15 +43,33 @@ _session.headers.update({
 @retry(
     retry=retry_if_exception_type((requests.exceptions.HTTPError, requests.exceptions.Timeout)),
     stop=stop_after_attempt(FETCH_MAX_RETRIES),
-    wait=wait_fixed(2),
+    wait=wait_exponential(multiplier=2, min=5, max=60),
     reraise=True,
+    before_sleep=lambda retry_state: logger.warning(
+        f"Request failed (attempt {retry_state.attempt_number}), "
+        f"retrying in {retry_state.next_action.sleep}s..."
+    ),
 )
 def _api_get(params: dict, timeout: int = 30) -> dict:
     """
     Make a GET request to the wiki API with retry logic.
+    Retries on 429 (rate limit) and 5xx errors with exponential backoff.
     """
     params["format"] = "json"
     response = _session.get(WIKI_API_BASE, params=params, timeout=timeout)
+
+    # Handle rate limiting specifically
+    if response.status_code == 429:
+        # Check for Retry-After header
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            wait_time = int(retry_after)
+        else:
+            wait_time = 30  # default 30s
+        logger.warning(f"Rate limited! Waiting {wait_time}s before retry.")
+        time.sleep(wait_time)
+        response = _session.get(WIKI_API_BASE, params=params, timeout=timeout)
+
     response.raise_for_status()
     return response.json()
 
