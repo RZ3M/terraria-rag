@@ -1,0 +1,25 @@
+# requirements.txt — Python dependencies for Terraria RAG
+
+# HTTP / API
+requests>=2.31.0
+openai>=1.12.0
+
+# HTML / text parsing
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Vector DB
+qdrant-client>=1.7.0
+
+# Embeddings
+sentence-transformers>=2.2.0
+
+# Progress bars
+tqdm>=4.66.0
+
+# Retry logic
+tenacity>=8.2.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
