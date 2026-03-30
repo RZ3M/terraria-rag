@@ -43,14 +43,14 @@ Terraria RAG is a local-first Retrieval Augmented Generation system for the Terr
 
 #### Ingestion Components
 - [ ] `INGESTION/fetcher.py` — MediaWiki API, paginated fetching, caching
-- [ ] `INGESTION/parser.py` — HTML/wikitext → structured sections
+- [x] `INGESTION/parser.py` — wikitext → structured sections (FIXED: nested brace algorithm)
 - [ ] `INGESTION/chunker.py` — semantic chunking by heading + paragraph
 - [ ] `INGESTION/embedder.py` — sentence-transformer batch embedding
-- [ ] `INGESTION/indexer.py` — Qdrant upsert with resume support
+- [x] `INGESTION/indexer.py` — Qdrant upsert (FIXED: named vector format for Qdrant 1.17) with resume support
 - [ ] `INGESTION/run_ingestion.py` — orchestrator with `--resume`, `--limit`, `--preview`
 
 #### Setup Scripts
-- [ ] `SCRIPTS/setup_qdrant.sh` — download & start Qdrant
+- [x] `SCRIPTS/setup_qdrant.sh` — download + YAML config for v1.17 — download & start Qdrant
 - [ ] `SCRIPTS/download_embeddings.sh` — download sentence-transformer models
 
 #### Validation
