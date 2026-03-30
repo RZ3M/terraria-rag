@@ -42,7 +42,8 @@ Terraria RAG is a local-first Retrieval Augmented Generation system for the Terr
 **Goal:** Fetch all wiki pages, chunk semantically, embed, and index in Qdrant.
 
 #### Ingestion Components
-- [ ] `INGESTION/fetcher.py` — MediaWiki API, paginated fetching, caching
+- [x] `INGESTION/fetcher.py` — MediaWiki API, paginated fetching, caching
+- [x] `INGESTION/html_fetcher.py` — Scrapling-based HTML fetcher for rendered pages (crafting recipes, infobox stats)
 - [x] `INGESTION/parser.py` — wikitext → structured sections (FIXED: nested brace algorithm)
 - [ ] `INGESTION/chunker.py` — semantic chunking by heading + paragraph
 - [ ] `INGESTION/embedder.py` — sentence-transformer batch embedding
@@ -124,7 +125,7 @@ These are aspirational — not committed for any milestone.
 | Milestone | Status | Completion |
 |-----------|--------|-----------|
 | 1 — Foundation | ✅ Complete | 100% |
-| 2 — Ingestion | 🚧 In Progress | ~30% |
+| 2 — Ingestion | 🚧 In Progress | ~40% |
 | 3 — Query & Retrieval | 📋 Planned | 0% |
 | 4 — Mod Integration | 📋 Planned | 0% |
 | 5 — Polish & Release | 📋 Planned | 0% |
