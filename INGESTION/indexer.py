@@ -111,7 +111,7 @@ def index_chunks(
 
             points.append(qdrant_models.PointStruct(
                 id=point_id,
-                vector=vector,
+                vector={"default": vector},  # named vector for Qdrant 1.7+
                 payload=chunk.to_payload(),
             ))
 

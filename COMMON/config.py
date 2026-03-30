@@ -23,7 +23,7 @@ CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 # MediaWiki API
 # ---------------------------------------------------------------------------
-WIKI_API_BASE = "https://terraria.wiki.gg/w/api.php"
+WIKI_API_BASE = "https://terraria.wiki.gg/api.php"
 WIKI_BASE_URL = "https://terraria.wiki.gg/wiki/"
 WIKI_ACTION = "query"
 WIKI_FORMAT = "json"

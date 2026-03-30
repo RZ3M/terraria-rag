@@ -134,7 +134,6 @@ def get_collection_info(client: Optional[QdrantClient] = None) -> dict:
         info = client.get_collection(COLLECTION_NAME)
         return {
             "name": COLLECTION_NAME,
-            "vectors_count": info.vectors_count,
             "points_count": info.points_count,
             "status": info.status,
             "dim": info.config.params.vectors["default"].size,

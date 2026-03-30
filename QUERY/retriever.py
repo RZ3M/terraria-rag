@@ -14,7 +14,6 @@ from COMMON.config import (
     COLLECTION_NAME,
     TOP_K,
     RETRIEVAL_SCORE_THRESHOLD,
-    EMBEDDING_DIM,
 )
 from COMMON.embedding_model import embed_single
 from COMMON.qdrant_client import get_qdrant_client, collection_exists
@@ -31,22 +30,6 @@ def build_qdrant_filter(
 ) -> Optional[qdrant_models.Filter]:
     """
     Build a Qdrant filter from game state parameters.
-
-    Parameters
-    ----------
-    category : str, optional
-        e.g. "Weapons", "Armor", "Biomes"
-    subcategory : str, optional
-        e.g. "Melee", "Head", "Ranged"
-    game_mode : str, optional
-        "Pre-Hardmode", "Hardmode", or "Post-Moon Lord"
-    obtain_method : str, optional
-        "Crafting", "Drop", "Purchase", "Fishing"
-
-    Returns
-    -------
-    qdrant_models.Filter or None
-        Qdrant filter object, or None for no filtering.
     """
     conditions = []
 
@@ -67,7 +50,6 @@ def build_qdrant_filter(
         )
 
     if game_mode:
-        # game_mode is a list in the payload, so we use MatchAny
         conditions.append(
             qdrant_models.FieldCondition(
                 key="game_mode",
@@ -101,24 +83,6 @@ def retrieve(
 ) -> list[RetrievalResult]:
     """
     Retrieve the most relevant chunks for a query from Qdrant.
-
-    Parameters
-    ----------
-    query_text : str
-        Natural language query.
-    top_k : int
-        Number of vectors to retrieve from Qdrant (pre-filter).
-    score_threshold : float
-        Minimum cosine similarity to include a result.
-    category, subcategory, game_mode, obtain_method : optional
-        Metadata filters for game-state-aware retrieval.
-    collection_name : str
-        Qdrant collection name.
-
-    Returns
-    -------
-    list[RetrievalResult]
-        Sorted by relevance (highest score first).
     """
     if not collection_exists():
         logger.error("Qdrant collection does not exist. Run ingestion first.")
@@ -137,24 +101,23 @@ def retrieve(
         obtain_method=obtain_method,
     )
 
-    # Search Qdrant
-    search_params = qdrant_models.SearchParams(
-        hnsw_ef=128,  # runtime search depth
-        exact=False,
-    )
-
-    results = client.search(
+    # Qdrant 1.17+ API: query_points (replaces search)
+    results = client.query_points(
         collection_name=collection_name,
-        query_vector=query_vector,
+        query=query_vector,
         query_filter=qdrant_filter,
         limit=top_k,
-        search_params=search_params,
+        search_params=qdrant_models.SearchParams(
+            hnsw_ef=128,
+            exact=False,
+        ),
         with_payload=True,
         score_threshold=score_threshold,
+        using="default",
     )
 
     retrieval_results = []
-    for rank, result in enumerate(results, start=1):
+    for rank, result in enumerate(results.points, start=1):
         try:
             chunk = WikiChunk.from_payload(result.payload)
             retrieval_results.append(RetrievalResult(
@@ -172,31 +135,3 @@ def retrieve(
     )
 
     return retrieval_results
-
-
-def retrieve_raw(
-    query_vector: list[float],
-    top_k: int = TOP_K,
-    score_threshold: float = RETRIEVAL_SCORE_THRESHOLD,
-    category: Optional[str] = None,
-    game_mode: Optional[str] = None,
-    collection_name: str = COLLECTION_NAME,
-) -> list[qdrant_models.ScoredPoint]:
-    """
-    Low-level Qdrant search returning raw scored points.
-    Use this if you need direct access to Qdrant payloads.
-    """
-    if not collection_exists():
-        return []
-
-    client = get_qdrant_client()
-    qdrant_filter = build_qdrant_filter(category=category, game_mode=game_mode)
-
-    return client.search(
-        collection_name=collection_name,
-        query_vector=query_vector,
-        query_filter=qdrant_filter,
-        limit=top_k,
-        score_threshold=score_threshold,
-        with_payload=True,
-    )

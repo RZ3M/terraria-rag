@@ -193,9 +193,15 @@ def run_preview(limit: int = 10) -> None:
     setup_logging("DEBUG")
 
     logger.info(f"Preview mode: processing first {limit} pages (no indexing)")
-    pages = list(fetch_all_page_titles(exclude_redirects=True, namespaces=[0]))[:limit]
 
-    for page in pages:
+    # Fetch pages lazily — stop as soon as we have enough
+    all_pages = fetch_all_page_titles(exclude_redirects=True, namespaces=[0])
+    collected = 0
+
+    for page in all_pages:
+        if collected >= limit:
+            break
+
         wiki_page = fetch_page_content(page.title)
         if wiki_page is None:
             continue
@@ -213,6 +219,8 @@ def run_preview(limit: int = 10) -> None:
 
         if len(chunks) > 3:
             print(f"  ... and {len(chunks) - 3} more chunks")
+
+        collected += 1
 
 
 def main() -> None:
