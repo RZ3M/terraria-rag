@@ -135,10 +135,16 @@ def fetch_all_page_titles(
             break
 
         for page in pages:
+            title = page["title"]
+            # Skip subpages (language variants like "Page/ja", "Page/de", etc.)
+            if "/" in title:
+                logger.debug(f"Skipping subpage: {title}")
+                continue
+
             wiki_page = WikiPage(
                 page_id=page["pageid"],
-                title=page["title"],
-                url=WIKI_BASE_URL + page["title"].replace(" ", "_"),
+                title=title,
+                url=WIKI_BASE_URL + title.replace(" ", "_"),
                 content="",  # not fetched yet
                 is_redirect=page.get("redirect", False),
                 length=page.get("length", 0),
