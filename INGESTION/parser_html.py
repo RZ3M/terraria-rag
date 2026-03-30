@@ -142,7 +142,6 @@ def _remove_noise(soup: BeautifulSoup) -> None:
         for elem in list(soup.find_all(attrs=attrs)):
             elem.decompose()
 
-    # Reference template dumps: remove <ol class="references"> (already caught)
     # Also remove the section divs that wrap reference lists — but NOT the main container
     for div in list(soup.find_all("div")):
         elem_class = div.get("class") or []
@@ -153,31 +152,6 @@ def _remove_noise(soup: BeautifulSoup) -> None:
         if (div.find("ol", class_="references") or div.find("ol", {"id": "references"})
                 or div.find("div", class_="references")):
             div.decompose()
-    """Remove navigation, edit links, references, and other non-content elements."""
-    noise_patterns = [
-        {"class": "mw-editsection"},
-        {"class": "toc"},
-        {"class": "navbox"},
-        {"class": "printfooter"},
-        {"id": "catlinks"},
-        {"class": "references"},
-    ]
-    # Use a list() copy to avoid iterator invalidation during decompose
-    for attrs in noise_patterns:
-        for elem in list(soup.find_all(attrs=attrs)):
-            elem.decompose()
-
-    # Reference template dumps: remove <ol class="references"> (already caught)
-    # Also remove the section divs that wrap reference lists
-    for div in list(soup.find_all("div")):
-        # A reference section div contains the reference heading and list
-        if (div.find("ol", class_="references") or div.find("ol", {"id": "references"})
-                or div.find("div", class_="references")):
-            div.decompose()
-        # Don't remove article content elements
-        elem_class = div.get("class") or []
-        if "mw-parser-output" in elem_class:
-            continue
 
 
 def _html_to_text(html: str) -> str:

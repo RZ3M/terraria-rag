@@ -7,17 +7,20 @@ and retrieval. Key design:
 - Split on paragraph boundaries when possible
 - Maintain 50-token overlap across chunk boundaries
 - Each chunk carries metadata about its position in the page
+
+Supports two content modes:
+- Wikitext (via parse_wiki_page from parser.py)
+- Rendered HTML (via parse_html_page from parser_html.py)
 """
 
 import logging
-import math
+import re
 from typing import Iterator
 
 from COMMON.config import (
     CHUNK_MAX_TOKENS,
     CHUNK_OVERLAP_TOKENS,
     CHUNK_HTML_STRIP,
-    WIKI_BASE_URL,
 )
 from COMMON.types import WikiChunk, WikiPage
 from INGESTION.parser import ParsedSection, parse_wiki_page, infer_category
@@ -25,14 +28,18 @@ from INGESTION.parser import ParsedSection, parse_wiki_page, infer_category
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def chunk_page(wiki_page: WikiPage) -> list[WikiChunk]:
     """
-    Parse a wiki page and produce a list of WikiChunk objects.
+    Parse a wikitext wiki page and produce a list of WikiChunk objects.
 
     Parameters
     ----------
     wiki_page : WikiPage
-        The raw wiki page with content.
+        The raw wiki page with wikitext content.
 
     Returns
     -------
@@ -40,19 +47,123 @@ def chunk_page(wiki_page: WikiPage) -> list[WikiChunk]:
         Ordered list of chunks from this page.
     """
     sections = parse_wiki_page(wiki_page)
+    return _chunk_sections(sections, wiki_page.title, wiki_page.url, wiki_page.content)
 
+
+def chunk_html_page(
+    wiki_page: WikiPage,
+    article_text: str,
+) -> list[WikiChunk]:
+    """
+    Chunk a rendered HTML wiki page.
+
+    The html_fetcher produces plain-text article content (via _build_article_text)
+    with markdown-style "## Heading" section markers, where HTML templates and
+    recipe tables are already converted to readable text. This function parses
+    that article text directly, preserving crafting recipes that would be lost
+    in wikitext-only fetching.
+
+    Parameters
+    ----------
+    wiki_page : WikiPage
+        Wiki page metadata (title, url, etc.).
+    article_text : str
+        The article text content from html_fetcher (plain text with crafting data
+        and "## Section" heading markers), OR raw HTML from MediaWiki
+        action=parse&prop=text (in which case BeautifulSoup is used).
+
+    Returns
+    -------
+    list[WikiChunk]
+        Chunks from the article with full crafting information.
+    """
+    from bs4 import BeautifulSoup
+
+    # html_fetcher's _build_article_text() produces plain text with "## Heading"
+    # markers. If the content looks like that, parse directly without BeautifulSoup.
+    if article_text.startswith("\n##") or (
+        "## " in article_text[:200] and not article_text.startswith("<")
+    ):
+        sections = _parse_plain_text_sections(article_text, wiki_page.title)
+    else:
+        # Raw HTML — use BeautifulSoup + parser_html
+        from INGESTION.parser_html import parse_html_page
+        wiki_page.content = article_text
+        sections = parse_html_page(wiki_page)
+
+    return _chunk_sections(sections, wiki_page.title, wiki_page.url, article_text)
+
+
+def _parse_plain_text_sections(text: str, page_title: str) -> list[ParsedSection]:
+    """
+    Parse plain-text article content with markdown-style section headings.
+    Handles output from html_fetcher's _build_article_text().
+    """
+
+    sections = []
+    current_heading = page_title
+    current_level = 1
+    current_content_lines = []
+
+    def _flush():
+        nonlocal current_content_lines, current_heading, current_level
+        if current_content_lines:
+            content_text = "\n".join(current_content_lines).strip()
+            if content_text:
+                sections.append(ParsedSection(
+                    heading=current_heading,
+                    heading_level=current_level,
+                    path=current_heading,
+                    content_html="",
+                    content_text=content_text,
+                    raw_content="",
+                ))
+            current_content_lines = []
+
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## ") or stripped.startswith("##\n"):
+            _flush()
+            current_heading = stripped.lstrip("#").strip()
+            current_level = 2
+        elif stripped.startswith("# ") or stripped.startswith("#\n"):
+            _flush()
+            current_heading = stripped.lstrip("#").strip()
+            current_level = 1
+        else:
+            if stripped:
+                current_content_lines.append(stripped)
+
+    _flush()
+    return sections
+
+
+# ---------------------------------------------------------------------------
+# Internal chunking logic
+# ---------------------------------------------------------------------------
+
+def _chunk_sections(
+    sections: list[ParsedSection],
+    wiki_title: str,
+    wiki_url: str,
+    page_content: str,
+) -> list[WikiChunk]:
+    """
+    Core chunking logic shared by both wikitext and HTML parsers.
+
+    Takes parsed sections and produces WikiChunk objects using the
+    shared CHUNK_MAX_TOKENS, CHUNK_OVERLAP_TOKENS, and CHUNK_HTML_STRIP settings.
+    """
     if not sections:
-        logger.debug(f"No sections parsed for page: {wiki_page.title}")
+        logger.debug(f"No sections parsed for page: {wiki_title}")
         return []
 
-    # Infer category from title and content
-    category, subcategory = infer_category(wiki_page.title, wiki_page.content)
+    category, subcategory = infer_category(wiki_title, page_content)
 
     chunks: list[WikiChunk] = []
     chunk_index = 0
 
     for section in sections:
-        # Strip HTML if configured
         if CHUNK_HTML_STRIP:
             section_text = section.content_text
         else:
@@ -61,13 +172,12 @@ def chunk_page(wiki_page: WikiPage) -> list[WikiChunk]:
         if not section_text or len(section_text.strip()) < 50:
             continue
 
-        # Check if the whole section fits in one chunk
         section_tokens = _estimate_tokens(section_text)
 
         if section_tokens <= CHUNK_MAX_TOKENS:
             chunks.append(WikiChunk(
-                wiki_title=wiki_page.title,
-                wiki_url=wiki_page.url,
+                wiki_title=wiki_title,
+                wiki_url=wiki_url,
                 section_path=section.path,
                 chunk_index=chunk_index,
                 content=section_text,
@@ -78,11 +188,11 @@ def chunk_page(wiki_page: WikiPage) -> list[WikiChunk]:
             ))
             chunk_index += 1
         else:
-            # Split section into smaller chunks
             section_chunks = _split_by_paragraph(
                 section_text,
                 section,
-                wiki_page,
+                wiki_title,
+                wiki_url,
                 category,
                 subcategory,
                 chunk_index,
@@ -96,7 +206,8 @@ def chunk_page(wiki_page: WikiPage) -> list[WikiChunk]:
 def _split_by_paragraph(
     text: str,
     section: ParsedSection,
-    wiki_page: WikiPage,
+    wiki_title: str,
+    wiki_url: str,
     category: str,
     subcategory: str,
     start_index: int,
@@ -112,7 +223,6 @@ def _split_by_paragraph(
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
     if not paragraphs:
-        # Fallback: split by single newlines
         paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
 
     chunks: list[WikiChunk] = []
@@ -123,8 +233,8 @@ def _split_by_paragraph(
     def _make_chunk(parts: list[str], idx: int) -> WikiChunk:
         content = " ".join(parts)
         return WikiChunk(
-            wiki_title=wiki_page.title,
-            wiki_url=wiki_page.url,
+            wiki_title=wiki_title,
+            wiki_url=wiki_url,
             section_path=section.path,
             chunk_index=idx,
             content=content,
@@ -138,9 +248,8 @@ def _split_by_paragraph(
         para_tokens = _estimate_tokens(para)
 
         if para_tokens > CHUNK_MAX_TOKENS:
-            # Single paragraph too large — split by sentence
             sentence_chunks = _split_by_sentence(
-                para, section, wiki_page, category, subcategory, chunk_idx
+                para, section, wiki_title, wiki_url, category, subcategory, chunk_idx
             )
             chunks.append(sentence_chunks)
             chunk_idx += 1
@@ -150,17 +259,13 @@ def _split_by_paragraph(
             current_chunk_parts.append(para)
             current_token_count += para_tokens
         else:
-            # Current chunk is full — save it and start new one
             if current_chunk_parts:
                 chunks.append(_make_chunk(current_chunk_parts, chunk_idx))
                 chunk_idx += 1
 
-            # Handle overlap
             if CHUNK_OVERLAP_TOKENS > 0 and current_chunk_parts:
                 overlap_text = " ".join(current_chunk_parts)
                 overlap_tokens = _estimate_tokens(overlap_text)
-
-                # Include as many previous paragraphs as fit in overlap
                 overlap_parts: list[str] = []
                 for part in reversed(current_chunk_parts):
                     part_tokens = _estimate_tokens(part)
@@ -169,7 +274,6 @@ def _split_by_paragraph(
                         overlap_tokens += part_tokens
                     else:
                         break
-
                 if overlap_parts:
                     current_chunk_parts = overlap_parts + [para]
                     current_token_count = overlap_tokens + para_tokens
@@ -180,7 +284,6 @@ def _split_by_paragraph(
                 current_chunk_parts = [para]
                 current_token_count = para_tokens
 
-    # Don't forget the last chunk
     if current_chunk_parts:
         chunks.append(_make_chunk(current_chunk_parts, chunk_idx))
 
@@ -190,17 +293,16 @@ def _split_by_paragraph(
 def _split_by_sentence(
     text: str,
     section: ParsedSection,
-    wiki_page: WikiPage,
+    wiki_title: str,
+    wiki_url: str,
     category: str,
     subcategory: str,
     start_index: int,
 ) -> WikiChunk:
     """
     Split a very large paragraph by sentence boundaries.
-    Returns a single chunk (caller handles iteration if multiple chunks needed).
+    Returns a single chunk (caller handles iteration if more are needed).
     """
-    import re
-    # Split on sentence-ending punctuation followed by space
     sentences = re.split(r"(?<=[.!?])\s+", text)
 
     chunks: list[WikiChunk] = []
@@ -216,8 +318,8 @@ def _split_by_sentence(
         else:
             if current_parts:
                 chunks.append(WikiChunk(
-                    wiki_title=wiki_page.title,
-                    wiki_url=wiki_page.url,
+                    wiki_title=wiki_title,
+                    wiki_url=wiki_url,
                     section_path=section.path,
                     chunk_index=idx,
                     content=" ".join(current_parts),
@@ -232,8 +334,8 @@ def _split_by_sentence(
 
     if current_parts:
         chunks.append(WikiChunk(
-            wiki_title=wiki_page.title,
-            wiki_url=wiki_page.url,
+            wiki_title=wiki_title,
+            wiki_url=wiki_url,
             section_path=section.path,
             chunk_index=idx,
             content=" ".join(current_parts),
@@ -243,13 +345,12 @@ def _split_by_sentence(
             tokens_estimate=current_tokens,
         ))
 
-    # Return the first chunk; caller should iterate if more are needed
     return chunks[0] if chunks else WikiChunk(
-        wiki_title=wiki_page.title,
-        wiki_url=wiki_page.url,
+        wiki_title=wiki_title,
+        wiki_url=wiki_url,
         section_path=section.path,
         chunk_index=start_index,
-        content=text[: CHUNK_MAX_TOKENS * 4],  # rough truncate
+        content=text[: CHUNK_MAX_TOKENS * 4],
         category=category,
         subcategory=subcategory,
         tokens_estimate=CHUNK_MAX_TOKENS,
@@ -259,7 +360,6 @@ def _split_by_sentence(
 def _estimate_tokens(text: str) -> int:
     """
     Rough token estimate: ~4 characters per token for English text.
-    More accurate would use a tokenizer, but that's slow for large docs.
     """
     if not text:
         return 0
@@ -269,11 +369,6 @@ def _estimate_tokens(text: str) -> int:
 def chunk_pages(pages: Iterator[WikiPage]) -> Iterator[list[WikiChunk]]:
     """
     Process an iterator of wiki pages, yielding chunk lists per page.
-
-    Parameters
-    ----------
-    pages : Iterator[WikiPage]
-        Iterator of raw wiki pages.
 
     Yields
     ------

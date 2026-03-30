@@ -2,12 +2,16 @@
 INGESTION/run_ingestion.py — Main ingestion orchestrator.
 
 Run with:
-    python INGESTION/run_ingestion.py [--resume] [--limit N]
+    python INGESTION/run_ingestion.py [--resume] [--limit N] [--fetch-mode wikitext|html]
 
 Options:
-    --resume    Resume from last checkpoint (skip already-indexed pages)
-    --limit N   Process only the first N pages (for testing)
-    --verbose   Enable debug logging
+    --resume          Resume from last checkpoint (skip already-indexed pages)
+    --limit N         Process only the first N pages (for testing)
+    --fetch-mode      Content mode: "wikitext" (MediaWiki API, default) or
+                      "html" (Scrapling/rendered — includes crafting recipes)
+    --verbose         Enable debug logging
+    --re-ingest       Delete existing chunks before re-ingesting (use with --fetch-mode html
+                      to replace wikitext content with rendered HTML content)
 """
 
 import argparse
@@ -28,17 +32,20 @@ from COMMON.config import (
     FETCH_BATCH_SIZE,
 )
 from COMMON.qdrant_client import create_collection, collection_exists
+from COMMON.types import WikiPage
 from INGESTION.fetcher import (
     fetch_all_page_titles,
     fetch_page_content,
+    fetch_page_html,
 )
-from INGESTION.chunker import chunk_page
+from INGESTION.chunker import chunk_page, chunk_html_page
 from INGESTION.embedder import embed_chunks
 from INGESTION.indexer import (
     index_chunks,
     load_ingestion_state,
     save_ingestion_state,
     save_chunks_to_disk,
+    delete_page_from_index,
 )
 
 logger = logging.getLogger("run_ingestion")
@@ -55,19 +62,34 @@ def run_full_ingestion(
     resume: bool = True,
     limit: int = 0,
     verbose: bool = False,
+    fetch_mode: str = "wikitext",
+    re_ingest: bool = False,
 ) -> None:
     """
     Run the full ingestion pipeline.
 
-    1. Fetch all wiki page titles (or load cached list)
-    2. For each page: fetch content, chunk, embed, index
-    3. Track progress in ingestion_state.json for resume support
+    Parameters
+    ----------
+    resume : bool
+        Resume from last checkpoint (skip already-indexed pages).
+    limit : int
+        Limit to N pages (0 = all pages).
+    verbose : bool
+        Enable debug logging.
+    fetch_mode : str
+        "wikitext" (MediaWiki API, default) or "html" (Scrapling rendered HTML
+        with full crafting recipes).
+    re_ingest : bool
+        If True, delete existing chunks for each page before re-ingesting.
+        Use with --fetch-mode html to replace wikitext content with rendered HTML.
     """
     log_level = "DEBUG" if verbose else LOG_LEVEL
     setup_logging(log_level)
 
     logger.info("=" * 60)
     logger.info("Terraria RAG — Full Ingestion Pipeline")
+    logger.info(f"  Fetch mode: {fetch_mode}")
+    logger.info(f"  Re-ingest:   {re_ingest}")
     logger.info("=" * 60)
 
     # Ensure Qdrant collection exists
@@ -111,18 +133,40 @@ def run_full_ingestion(
     total_pages_all_time = state.get("total_pages_processed", 0)
 
     # Process pages with progress bar
-    for page in tqdm(pages_to_process, desc="Ingesting pages", unit="page"):
+    for page in tqdm(pages_to_process, desc=f"Ingesting ({fetch_mode})", unit="page"):
         page_start = time.time()
 
         try:
-            # Fetch content (uses cache)
-            wiki_page = fetch_page_content(page.title)
-            if wiki_page is None or not wiki_page.exists:
-                logger.warning(f"Skipping empty/placeholder page: {page.title}")
-                continue
+            # --- Fetch content ---
+            if fetch_mode == "html":
+                if re_ingest:
+                    logger.debug(f"Deleting old chunks for: {page.title}")
+                    delete_page_from_index(page.url)
 
-            # Chunk
-            chunks = chunk_page(wiki_page)
+                # Use MediaWiki rendered HTML endpoint (much faster than Scrapling,
+                # same recipe quality)
+                raw_html = fetch_page_html(page.title)
+                if raw_html is None:
+                    logger.warning(f"HTML fetch failed for: {page.title}")
+                    continue
+
+                wiki_page = WikiPage(
+                    page_id=page.page_id,
+                    title=page.title,
+                    url=page.url,
+                    content="",
+                    is_redirect=False,
+                    length=len(raw_html),
+                )
+                # chunk_html_page detects plain-text vs HTML content automatically
+                chunks = chunk_html_page(wiki_page, raw_html)
+            else:
+                # Standard wikitext fetch
+                wiki_page = fetch_page_content(page.title)
+                if wiki_page is None or not wiki_page.exists:
+                    logger.warning(f"Skipping empty/placeholder page: {page.title}")
+                    continue
+                chunks = chunk_page(wiki_page)
             if not chunks:
                 logger.debug(f"No chunks generated for: {page.title}")
                 # Mark as processed anyway to avoid re-fetching
@@ -186,37 +230,53 @@ def run_full_ingestion(
     logger.info("=" * 60)
 
 
-def run_preview(limit: int = 10) -> None:
+def run_preview(limit: int = 10, fetch_mode: str = "wikitext") -> None:
     """
     Run a small preview of the pipeline — fetch and chunk a few pages,
     no indexing. Useful for testing without committing to full ingestion.
     """
     setup_logging("DEBUG")
+    logger.info(f"Preview mode: processing first {limit} pages ({fetch_mode}, no indexing)")
 
-    logger.info(f"Preview mode: processing first {limit} pages (no indexing)")
-
-    # Fetch pages lazily — stop as soon as we have enough
     all_pages = fetch_all_page_titles(exclude_redirects=True, namespaces=[0])
-    collected = 0
 
+    collected = 0
     for page in all_pages:
         if collected >= limit:
             break
 
-        wiki_page = fetch_page_content(page.title)
-        if wiki_page is None:
-            continue
+        if fetch_mode == "html":
+            raw_html = fetch_page_html(page.title)
+            if raw_html is None:
+                continue
+            wiki_page = WikiPage(
+                page_id=page.page_id,
+                title=page.title,
+                url=page.url,
+                content="",
+                is_redirect=False,
+                length=len(raw_html),
+            )
+            chunks = chunk_html_page(wiki_page, raw_html)
+            content_len = len(raw_html)
+        else:
+            wiki_page = fetch_page_content(page.title)
+            if wiki_page is None:
+                continue
+            chunks = chunk_page(wiki_page)
+            content_len = len(wiki_page.content)
 
-        chunks = chunk_page(wiki_page)
         print(f"\n{'=' * 60}")
         print(f"Page: {page.title}")
         print(f"URL: {wiki_page.url}")
-        print(f"Content length: {len(wiki_page.content)} chars")
+        print(f"Content length: {content_len} chars")
         print(f"Chunks produced: {len(chunks)}")
-        for i, chunk in enumerate(chunks[:3]):  # show first 3
+        for i, chunk in enumerate(chunks[:3]):
             print(f"  Chunk {i}: [{chunk.section_path}] "
                   f"(~{chunk.tokens_estimate} tokens)\n"
                   f"    {chunk.content[:150]}...")
+
+        collected += 1
 
         if len(chunks) > 3:
             print(f"  ... and {len(chunks) - 3} more chunks")
@@ -236,16 +296,43 @@ def main() -> None:
                         help="Run preview mode (no indexing, just fetch+chunk)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable debug logging")
+    parser.add_argument(
+        "--fetch-mode",
+        choices=["wikitext", "html"],
+        default="wikitext",
+        help=(
+            '"wikitext" (default): MediaWiki API — fast but templates like '
+            '{{recipes}} are unexpanded. '
+            '"html": Scrapling — fully rendered pages with crafting recipes.'
+        ),
+    )
+    parser.add_argument(
+        "--re-ingest",
+        action="store_true",
+        help=(
+            "Delete existing chunks before re-ingesting. "
+            "Use with --fetch-mode html to replace wikitext content "
+            "with rendered HTML (fills in missing crafting recipes)."
+        ),
+    )
 
     args = parser.parse_args()
 
+    if args.fetch_mode == "html" and not args.re_ingest:
+        logger.info(
+            "TIP: Use --re-ingest with --fetch-mode html to replace old "
+            "wikitext chunks with new HTML chunks (same point IDs = auto-overwrite)."
+        )
+
     if args.preview:
-        run_preview(limit=args.limit or 10)
+        run_preview(limit=args.limit or 10, fetch_mode=args.fetch_mode)
     else:
         run_full_ingestion(
             resume=args.resume,
             limit=args.limit,
             verbose=args.verbose,
+            fetch_mode=args.fetch_mode,
+            re_ingest=args.re_ingest,
         )
 
 

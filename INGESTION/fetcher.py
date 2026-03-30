@@ -296,6 +296,74 @@ def fetch_pages_incremental(
 
 
 # ---------------------------------------------------------------------------
+# Rendered HTML fetching (for crafting recipes)
+# ---------------------------------------------------------------------------
+
+def fetch_page_html(title: str, cache_dir: Optional[Path] = None) -> Optional[str]:
+    """
+    Fetch a rendered HTML version of a wiki page via MediaWiki's
+    action=parse&prop=text endpoint.
+
+    Unlike wikitext (which has unexpanded {{recipes}} templates), the rendered
+    HTML has fully expanded crafting tables with real item names.
+
+    Parameters
+    ----------
+    title : str
+        Exact page title as it appears on the wiki.
+    cache_dir : Path, optional
+        Cache directory. If None, uses RAW_PAGES_DIR.
+
+    Returns
+    -------
+    str or None
+        Rendered HTML content, or None if the page was not found.
+    """
+    cache_dir = Path(cache_dir) if cache_dir else RAW_PAGES_DIR
+    html_cache_dir = cache_dir / "html_rendered"
+    html_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_title = title.replace("/", "_").replace("\\", "_").replace(":", "_")[:200]
+    cache_file = html_cache_dir / f"{safe_title}.html"
+
+    # Check cache
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            if content:
+                logger.debug(f"HTML cache hit for: {title}")
+                return content
+        except Exception:
+            pass
+
+    _be_polite()
+
+    params = {
+        "action": "parse",
+        "page": title,
+        "prop": "text",
+        "format": "json",
+    }
+
+    data = _api_get(params)
+    html = data.get("parse", {}).get("text", {}).get("*", "")
+
+    if not html:
+        logger.warning(f"No HTML content for: {title}")
+        return None
+
+    # Cache the HTML
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception as e:
+        logger.warning(f"Failed to cache HTML for {title}: {e}")
+
+    return html
+
+
+# ---------------------------------------------------------------------------
 # Get just the page list (without content) — for initial sitemap
 # ---------------------------------------------------------------------------
 
