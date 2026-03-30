@@ -37,6 +37,7 @@ from INGESTION.embedder import embed_chunks
 from INGESTION.indexer import (
     index_chunks,
     load_ingestion_state,
+    save_ingestion_state,
     save_chunks_to_disk,
 )
 
