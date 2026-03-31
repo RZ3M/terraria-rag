@@ -122,7 +122,8 @@ def run_full_ingestion(
                 f"{total_pages - len(indexed_pages)} to process)")
 
     # Filter out already-indexed pages if resuming
-    if resume:
+    # Note: --re-ingest overrides resume to force re-processing all pages
+    if resume and not re_ingest:
         pages_to_process = [p for p in all_pages if p.page_id not in indexed_pages]
     else:
         pages_to_process = all_pages

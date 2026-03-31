@@ -240,6 +240,8 @@ def fetch_page_content(title: str, cache_dir: Path = RAW_PAGES_DIR) -> Optional[
             is_redirect=page_data.get("redirect", False),
             length=revision.get("size", 0),
         )
+        # Normalize URL: use consistent un-encoded apostrophes for Qdrant matching
+        wiki_page.url = WIKI_BASE_URL + wiki_page.title.replace(" ", "_")
 
         # Cache the result
         try:

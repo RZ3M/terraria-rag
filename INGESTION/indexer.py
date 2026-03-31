@@ -181,26 +181,28 @@ def index_chunks_streaming(
     return total_pages, total_chunks
 
 
-def delete_page_from_index(page_url: str) -> None:
+def delete_page_from_index(page_url: str) -> int:
     """
     Delete all chunks for a given page URL from the index.
     Useful for re-ingesting updated pages.
+
+    Returns the number of chunks deleted.
     """
     client = get_qdrant_client()
-    # Qdrant scroll with filter to find points
     results, _ = client.scroll(
         collection_name=COLLECTION_NAME,
-        scroll_filter={
-            "must": [
-                {
-                    "key": "wiki_url",
-                    "match": {"value": page_url},
-                }
+        scroll_filter=qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="wiki_url",
+                    match=qdrant_models.MatchValue(value=page_url),
+                )
             ]
-        },
-        limit=1000,
+        ),
+        limit=10000,
     )
 
+    deleted = 0
     if results:
         ids_to_delete = [r.id for r in results]
         client.delete(
@@ -209,4 +211,9 @@ def delete_page_from_index(page_url: str) -> None:
                 points=ids_to_delete,
             ),
         )
-        logger.info(f"Deleted {len(ids_to_delete)} chunks for URL: {page_url}")
+        deleted = len(ids_to_delete)
+        logger.info(f"Deleted {deleted} chunks for URL: {page_url}")
+    else:
+        logger.debug(f"No chunks to delete for URL: {page_url}")
+
+    return deleted
