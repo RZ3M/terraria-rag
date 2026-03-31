@@ -163,12 +163,12 @@ def query(
 
     results = retrieve(
         query_text=question,
-        top_k=retrieve_k * 2,  # retrieve more, then slice
+        top_k=retrieve_k * 3,  # retrieve more for re-ranking + keyword boost
         category=cat,
         game_mode=game_mode,
     )
 
-    # Take top K
+    # Top K after keyword boost and section quality re-ranking (both done in retrieve())
     top_results = results[:retrieve_k]
 
     # Step 2: Build prompts

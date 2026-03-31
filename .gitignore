@@ -16,3 +16,5 @@ DATA/
 # IDE
 .vscode/
 .idea/
+.venv/
+.venv/
