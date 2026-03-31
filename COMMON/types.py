@@ -165,12 +165,17 @@ class GameState:
     current_npc: str = "Guide"  # which NPC is giving hints
 
     def to_filter_dict(self) -> dict:
-        """Convert to Qdrant filter format."""
-        filters = {}
+        """
+        Convert to a simple filter dict consumed by query_engine.py.
+
+        Returns game_mode as a list of strings so the caller can use
+        Qdrant's MatchAny directly — no MongoDB-style $or/$eq parsing needed.
+        """
+        filters: dict = {}
         if self.is_hardmode:
-            filters["game_mode"] = {"$or": [{"$eq": "Hardmode"}, {"$eq": "Post-Moon Lord"}]}
+            filters["game_mode"] = ["Hardmode", "Post-Moon Lord"]
         else:
-            filters["game_mode"] = {"$eq": "Pre-Hardmode"}
+            filters["game_mode"] = ["Pre-Hardmode"]
         return filters
 
     def to_prompt_string(self) -> str:

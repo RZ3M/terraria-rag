@@ -144,28 +144,17 @@ def query(
     start_time = time.time()
 
     # Step 1: Retrieve chunks
+    # NOTE: game_mode filtering is only effective after re-ingestion populates
+    # the metadata field. Until then it is skipped to avoid empty results.
+    game_mode_list: list[str] | None = None
     if game_state:
         filter_dict = game_state.to_filter_dict()
-        cat = filter_dict.get("category", {}).get("$eq")
-        game_mode = None
-        # Extract game_mode from filter
-        gm_filter = filter_dict.get("game_mode", {})
-        if isinstance(gm_filter, dict) and "$eq" in gm_filter:
-            game_mode = gm_filter["$eq"]
-        elif isinstance(gm_filter, dict) and "$or" in gm_filter:
-            # Take first option
-            options = gm_filter["$or"]
-            if options and "$eq" in options[0]:
-                game_mode = options[0]["$eq"]
-    else:
-        cat = None
-        game_mode = None
+        game_mode_list = filter_dict.get("game_mode")  # list[str] or None
 
     results = retrieve(
         query_text=question,
-        top_k=retrieve_k * 3,  # retrieve more for re-ranking + keyword boost
-        category=cat,
-        game_mode=game_mode,
+        top_k=retrieve_k * 3,  # retrieve more for section-quality re-ranking
+        game_mode=game_mode_list[0] if game_mode_list else None,
     )
 
     # Top K after keyword boost and section quality re-ranking (both done in retrieve())

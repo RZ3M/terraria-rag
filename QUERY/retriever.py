@@ -21,6 +21,8 @@ from COMMON.config import (
     COLLECTION_NAME,
     TOP_K,
     RETRIEVAL_SCORE_THRESHOLD,
+    RERANKER_MODEL,
+    RERANK_TOP_N,
 )
 from COMMON.embedding_model import embed_single
 from COMMON.qdrant_client import get_qdrant_client, collection_exists
@@ -29,17 +31,64 @@ from QUERY.query_expander import expand_query, apply_section_quality
 
 logger = logging.getLogger(__name__)
 
-# Common English words to skip when extracting item names from queries
+# ---------------------------------------------------------------------------
+# Cross-encoder reranker (lazy-loaded singleton)
+# ---------------------------------------------------------------------------
+
+_reranker = None
+
+
+def _get_reranker():
+    """Lazy-load the cross-encoder reranker on first use."""
+    global _reranker
+    if _reranker is None:
+        try:
+            from sentence_transformers import CrossEncoder
+            _reranker = CrossEncoder(RERANKER_MODEL)
+            logger.info(f"Reranker loaded: {RERANKER_MODEL}")
+        except Exception as e:
+            logger.warning(f"Reranker unavailable ({e}); skipping reranking.")
+            _reranker = False  # sentinel: don't try again
+    return _reranker if _reranker is not False else None
+
+
+def _rerank(query: str, results: list[RetrievalResult], top_n: int) -> list[RetrievalResult]:
+    """
+    Re-score results with a cross-encoder and return top_n.
+
+    Cross-encoders score (query, document) pairs directly, giving much
+    better precision than bi-encoder cosine similarity alone.
+    """
+    reranker = _get_reranker()
+    if reranker is None or not results:
+        return results[:top_n]
+
+    pairs = [(query, r.chunk.content) for r in results]
+    try:
+        scores = reranker.predict(pairs)
+        for r, score in zip(results, scores):
+            r.score = float(score)
+        results.sort(key=lambda r: r.score, reverse=True)
+    except Exception as e:
+        logger.warning(f"Reranking failed: {e}; using original order.")
+
+    return results[:top_n]
+
+
+# Common English words to skip when extracting item names from queries.
+# Must be lowercase — comparison uses w.lower() on line ~233.
 SKIP_WORDS = {
-    "The", "Best", "Good", "Great", "How", "What", "Where",
-    "When", "Which", "Item", "Setup", "Build", "Use", "Using",
-    "Wall", "Flesh", "World", "Game", "Boss", "First", "Like",
-    "Help", "Need", "Want", "For", "And", "All", "Most", "Same",
-    "Guide", "Hardmode", "Desktop", "Console", "Mobile", "Versions",
-    "Every", "With", "From", "This", "That", "These", "Those",
-    "Your", "Just", "Very", "More", "Only", "Also", "Will",
-    "Into", "Make", "Than", "Then", "Some", "Over", "Such",
-    "Day", "Night", "One", "Two", "New", "Old", "Big", "Small",
+    "the", "best", "good", "great", "how", "what", "where",
+    "when", "which", "item", "setup", "build", "use", "using",
+    "wall", "flesh", "world", "game", "boss", "first", "like",
+    "help", "need", "want", "for", "and", "all", "most", "same",
+    "guide", "hardmode", "desktop", "console", "mobile", "versions",
+    "every", "with", "from", "this", "that", "these", "those",
+    "your", "just", "very", "more", "only", "also", "will",
+    "into", "make", "than", "then", "some", "over", "such",
+    "day", "night", "one", "two", "new", "old", "big", "small",
+    "get", "have", "does", "tell", "tips", "about", "beat", "fight",
+    "should", "available", "give", "deal", "spawn", "move",
 }
 
 
@@ -196,15 +245,16 @@ def _extract_item_names(expanded_query: str) -> list[str]:
         ("bones", "thrower"): "Bone Thrower",
     }
 
-    # Weapons by category (useful for direct querying)
+    # Weapons by category (useful for direct querying).
+    # Keys must be plain strings — comparison uses w_low (a string).
     WEAPON_CATS = {
-        ("ranged",): "Ranged", ("guns",): "Guns", ("bow",): "Bow",
-        ("rifle",): "Rifle", ("shotgun",): "Shotgun", ("pistol",): "Pistol",
-        ("bullet",): "Bullet", ("arrow",): "Arrow", ("dart",): "Dart",
-        ("melee",): "Melee", ("sword",): "Sword", ("magic",): "Magic",
-        ("staff",): "Staff", ("summon",): "Summon", ("minion",): "Minion",
-        ("spear",): "Spear", ("flail",): "Flail", ("boomerang",): "Boomerang",
-        ("thrown",): "Thrown",
+        "ranged": "Ranged", "guns": "Guns", "bow": "Bow",
+        "rifle": "Rifle", "shotgun": "Shotgun", "pistol": "Pistol",
+        "bullet": "Bullet", "arrow": "Arrow", "dart": "Dart",
+        "melee": "Melee", "sword": "Sword", "magic": "Magic",
+        "staff": "Staff", "summon": "Summon", "minion": "Minion",
+        "spear": "Spear", "flail": "Flail", "boomerang": "Boomerang",
+        "thrown": "Thrown",
     }
 
     extracted: list[str] = []
@@ -239,7 +289,7 @@ def _extract_item_names(expanded_query: str) -> list[str]:
         normalized = w.title().replace("'", "'")
         # Skip if it's a weapon category word
         if w_low in WEAPON_CATS:
-            extracted.append(WEAPON_CATS[(w_low,)])
+            extracted.append(WEAPON_CATS[w_low])
             continue
         # Add as potential item
         extracted.append(normalized)
@@ -284,10 +334,15 @@ def retrieve(
 
     results: list[RetrievalResult] = []
 
+    # Compute expansion once — use original query for item extraction (expanded
+    # query has too many noise terms), use expanded for the semantic embedding.
+    expanded = expand_query(query_text) if expand_query_flag else query_text
+
     # ---- Strategy 1: Direct item name queries ----
     if expand_query_flag:
-        expanded = expand_query(query_text)
-        item_names = _extract_item_names(expanded)
+        # Extract items from the ORIGINAL query (not expanded — expansion adds
+        # generic category words like "guns", "rifle" that pollute item search)
+        item_names = _extract_item_names(query_text)
 
         logger.debug(f"Extracted item names: {item_names}")
 
@@ -299,7 +354,6 @@ def retrieve(
             results.extend(item_results)
 
     # ---- Strategy 2: Expanded semantic query (top up) ----
-    expanded = expand_query(query_text)
     query_vector = embed_single(expanded)
     sem_results = client.query_points(
         collection_name=collection_name,
@@ -332,14 +386,17 @@ def retrieve(
 
     results = list(seen.values())
 
-    # ---- Section quality re-ranking ----
-    results = apply_section_quality(results)
-
-    # Sort by adjusted score
+    # ---- Sort by bi-encoder score before cross-encoder reranking ----
     results.sort(key=lambda r: r.score, reverse=True)
 
-    # Limit to top_k
-    results = results[:top_k]
+    # ---- Cross-encoder reranking (precise query-document scoring) ----
+    # Rerank the top candidates; this fixes cases where bi-encoder similarity
+    # is misled by surface-level word overlap.
+    results = _rerank(query_text, results, top_n=top_k)
+
+    # ---- Section quality boost (post-rerank, as a final tie-breaker) ----
+    # Applied after cross-encoder so it only breaks ties, not overrides.
+    results = apply_section_quality(results)
 
     logger.debug(
         f"Retrieved {len(results)} chunks for query: "

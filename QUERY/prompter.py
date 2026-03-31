@@ -4,7 +4,6 @@ QUERY/prompter.py — Prompt construction for LLM generation.
 Builds system and user prompts from retrieved chunks and game state.
 """
 
-import textwrap
 from typing import Optional
 
 from COMMON.config import (
@@ -48,9 +47,9 @@ def build_context_string(
         if include_raw and chunk.raw_html:
             parts.append(f"{header}\n{chunk.raw_html}")
         else:
-            # Wrap long content
-            wrapped = textwrap.fill(chunk.content, width=100, break_long_words=False)
-            parts.append(f"{header}\n{wrapped}")
+            # Preserve original formatting — textwrap.fill would destroy tables,
+            # recipe lists, and bullet points by collapsing newlines.
+            parts.append(f"{header}\n{chunk.content}")
 
     return "\n\n".join(parts)
 
@@ -131,10 +130,10 @@ def format_hint_response(response: str) -> str:
     response = re.sub(r"<[^>]+>", "", response)
     response = response.strip()
 
-    # Ensure it doesn't exceed a reasonable hint length
-    MAX_HINT_CHARS = 500
+    # Allow up to 1500 chars — crafting chains and boss strategies need room.
+    # The LLM max_tokens setting already caps the raw output length.
+    MAX_HINT_CHARS = 1500
     if len(response) > MAX_HINT_CHARS:
-        # Try to cut at a sentence boundary
         cutoff = response[:MAX_HINT_CHARS].rfind(". ")
         if cutoff > 100:
             response = response[:cutoff + 1]

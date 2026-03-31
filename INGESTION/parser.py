@@ -24,31 +24,25 @@ logger = logging.getLogger(__name__)
 
 def infer_category(wiki_title: str, page_content: str) -> tuple[str, str]:
     """
-    Attempt to infer the category and subcategory from page title and content.
+    Infer category and subcategory from page title and content.
     """
     title_lower = wiki_title.lower()
     content_lower = page_content.lower()[:5000]
 
     weapon_types = {
-        "Melee": ["sword", "spear", "axe", "hammer", "boomerang"],
-        "Ranged": ["bow", "gun", "rifle", "shotgun", "pistol", "musket"],
-        "Magic": ["wand", "staff", "book", "tome"],
-        "Summon": ["summoning", "minion", "whip"],
-        "Throwing": ["thrown", "knife", "grenade", "dart"],
+        "Melee": ["sword", "spear", "axe", "hammer", "boomerang", "blade", "broadsword",
+                  "flail", "javelin", "yoyo"],
+        "Ranged": ["bow", "gun", "rifle", "shotgun", "pistol", "musket", "repeater",
+                   "launcher", "cannon"],
+        "Magic": ["wand", "staff", "book", "tome", "spell"],
+        "Summon": ["summoning", "minion", "whip", "sentry"],
+        "Throwing": ["thrown", "knife", "grenade", "dart", "shuriken"],
     }
 
     armor_types = {
-        "Head": ["helmet", "mask", "hat", "hood", "crown"],
-        "Body": ["chestplate", "vest", "shirt", "tunic"],
+        "Head": ["helmet", "mask", "hat", "hood", "crown", "headgear"],
+        "Body": ["chestplate", "vest", "shirt", "tunic", "breastplate", "chainmail"],
         "Legs": ["greaves", "pants", "boots", "leggings"],
-    }
-
-    biome_keywords = {
-        "Biomes": ["surface", "underground", "cavern", "corruption", "crimson",
-                   "hallow", "desert", "snow", "jungle", "ocean", "dungeon",
-                   "temple", "lihzhard", "shimmer"],
-        "Blocks": ["stone", "dirt", "sand", "mud", "clay", "ice", "snow",
-                   "obsidian", "ash", "pearlstone", "ebonsand", "Crimsand"],
     }
 
     category = ""
@@ -57,11 +51,21 @@ def infer_category(wiki_title: str, page_content: str) -> tuple[str, str]:
     title_words = title_lower.replace("-", " ").replace("_", " ").split()
     title_set = set(title_words)
 
+    # Check title first, then content for weapon/armor types
     for wtype, keywords in weapon_types.items():
         if any(kw in title_lower for kw in keywords) or any(kw in title_set for kw in keywords):
             category = "Weapons"
             subcategory = wtype
             break
+
+    if not category:
+        # Content signals: "is a melee weapon", "is a ranged weapon", etc.
+        for wtype, keywords in weapon_types.items():
+            if any(f"is a {kw}" in content_lower or f"is an {kw}" in content_lower
+                   for kw in keywords):
+                category = "Weapons"
+                subcategory = wtype
+                break
 
     if not category:
         for atype, keywords in armor_types.items():
@@ -71,28 +75,87 @@ def infer_category(wiki_title: str, page_content: str) -> tuple[str, str]:
                 break
 
     if not category:
-        for btype, keywords in biome_keywords.items():
-            if any(kw in title_lower for kw in keywords):
-                category = btype
-                break
-
-    if not category:
-        for cat, keywords in biome_keywords.items():
-            if any(kw in content_lower for kw in keywords):
-                category = cat
-                break
-
-    if not category:
         if any(w in title_lower for w in ["ore", "bar", "ingot"]):
             category = "Ores"
         elif any(w in title_lower for w in ["potion", "elixir", "flask"]):
             category = "Potions"
-        elif any(w in title_lower for w in ["npc", "merchant", "guide"]):
+        elif any(w in title_lower for w in ["npc", "merchant", "guide", "dealer",
+                                             "tinkerer", "wizard", "nurse"]):
             category = "Town NPCs"
         elif any(w in title_lower for w in ["boss", "event"]):
             category = "Bosses"
+        elif any(w in title_lower for w in ["accessory", "shield", "band", "emblem",
+                                             "cross necklace", "star cloak"]):
+            category = "Accessories"
+        elif "armor" in title_lower:
+            category = "Armor"
+
+    if not category:
+        # Last resort: check content for NPC/boss indicators
+        if "town npc" in content_lower or "sells the following" in content_lower:
+            category = "Town NPCs"
+        elif "is a boss" in content_lower or "boss fight" in content_lower:
+            category = "Bosses"
+        elif "is an accessory" in content_lower or "is a hardmode accessory" in content_lower:
+            category = "Accessories"
 
     return category, subcategory
+
+
+def infer_game_mode(page_content: str) -> list[str]:
+    """
+    Infer which game mode(s) this page's content applies to.
+    Returns a list: ["Pre-Hardmode"], ["Hardmode"], ["Post-Moon Lord"], or [].
+    """
+    content_lower = page_content.lower()[:3000]
+
+    hardmode_signals = [
+        "is a hardmode", "hardmode weapon", "hardmode accessory",
+        "hardmode armor", "hardmode ore", "hardmode boss",
+        "after defeating the wall of flesh", "after wall of flesh",
+        "hardmode exclusive",
+    ]
+    post_ml_signals = [
+        "is a post-moon lord", "after defeating the moon lord",
+        "after moon lord", "post moon lord", "post-moon lord",
+        "dropped by moon lord",
+    ]
+    pre_hardmode_signals = [
+        "pre-hardmode", "available before hardmode",
+        "is a pre-hardmode",
+    ]
+
+    modes: list[str] = []
+
+    if any(sig in content_lower for sig in post_ml_signals):
+        modes.append("Post-Moon Lord")
+    elif any(sig in content_lower for sig in hardmode_signals):
+        modes.append("Hardmode")
+    elif any(sig in content_lower for sig in pre_hardmode_signals):
+        modes.append("Pre-Hardmode")
+
+    return modes
+
+
+def infer_obtain_method(page_content: str) -> str:
+    """
+    Infer the primary obtain method from page content.
+    Returns one of: "Crafting", "Drop", "Purchase", "Fishing", "Other", or "".
+    """
+    content_lower = page_content.lower()[:3000]
+
+    if any(s in content_lower for s in ["crafted at", "crafting station", "at a workbench",
+                                          "at an anvil", "[crafting recipe]", "crafted using"]):
+        return "Crafting"
+    if any(s in content_lower for s in ["dropped by", "has a", "% chance to drop",
+                                          "1/", "drop rate", "loot"]):
+        return "Drop"
+    if any(s in content_lower for s in ["sold by", "sells for", "purchased from",
+                                          "bought from", "costs "]):
+        return "Purchase"
+    if any(s in content_lower for s in ["fishing", "caught while", "found by fishing"]):
+        return "Fishing"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +257,9 @@ def _strip_wikitext(wikitext: str) -> str:
     text = re.sub(r"\{\|[^\}]*\|\}", "", text, flags=re.DOTALL)
 
     # Wiki links: [[Link|Display]] -> Display, [[Link]] -> Link
-    text = re.sub(r"\[\[([^|\]]*\|)?([^\]]+)\]\]", r"\2", text)
-    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+    # Add spaces around replacement to prevent word concatenation like "aHardmodebroadsword"
+    text = re.sub(r"\[\[([^|\]]*\|)?([^\]]+)\]\]", r" \2 ", text)
+    text = re.sub(r"\[\[([^\]]+)\]\]", r" \1 ", text)
 
     # Bold/italic ''' and ''
     text = re.sub(r"'''+", "", text)
@@ -245,6 +309,16 @@ def _strip_templates(text: str) -> str:
 
 
 def _normalize_whitespace(text: str) -> str:
-    """Collapse multiple spaces/newlines into single spaces."""
-    text = re.sub(r"\s+", " ", text)
+    """
+    Normalize whitespace while preserving paragraph boundaries.
+
+    Collapses runs of spaces (not newlines) so that the chunker's
+    paragraph splitter can still find double-newline boundaries.
+    """
+    # Collapse 3+ consecutive newlines to 2 (preserve paragraph breaks)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Collapse spaces/tabs on each line (but not newlines)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    # Remove trailing spaces on each line
+    text = re.sub(r" *\n *", "\n", text)
     return text.strip()

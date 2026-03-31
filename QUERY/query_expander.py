@@ -184,7 +184,11 @@ def expand_query(query: str) -> str:
             unique_terms.append(term)
 
     if unique_terms:
-        # Append terms to query for better embedding match
+        # Cap expansion to avoid diluting the embedding signal.
+        # Sentence transformers average over all tokens, so adding 30+ loosely
+        # related terms hurts more than it helps.
+        MAX_EXPANSION_TERMS = 8
+        unique_terms = unique_terms[:MAX_EXPANSION_TERMS]
         return f"{query} {' '.join(unique_terms)}"
     return query
 

@@ -142,6 +142,40 @@ def _remove_noise(soup: BeautifulSoup) -> None:
         for elem in list(soup.find_all(attrs=attrs)):
             elem.decompose()
 
+    # Remove elements by role="navigation" (catches navigation templates
+    # that don't use the standard navbox class)
+    for elem in list(soup.find_all(role="navigation")):
+        elem.decompose()
+
+    # Remove any element whose class contains "nav" (catches nav-table,
+    # navbox-group, terraria-nav, etc. used by the Terraria wiki weapon lists)
+    for elem in list(soup.find_all(True)):
+        try:
+            classes = elem.get("class") or []
+        except AttributeError:
+            continue  # element was decomposed as part of a parent
+        if any("nav" in cls.lower() for cls in classes):
+            elem.decompose()
+
+    # Size heuristic: a nested element (div/table/ul inside the content) with
+    # >4000 chars AND >40 links is almost certainly a navigation/index table.
+    # Protect the main article container and direct children.
+    _PROTECTED_CLASSES = {"mw-parser-output", "mw-content-ltr", "mw-content-rtl"}
+    for elem in list(soup.find_all(["div", "table", "ul"])):
+        try:
+            elem_classes = set(elem.get("class") or [])
+            if elem_classes & _PROTECTED_CLASSES:
+                continue  # never remove the main content container
+            # Only remove if it's a nested element (has a parent), not a top-level div
+            if elem.parent is None or elem.parent.name in ("html", "[document]"):
+                continue
+            text_len = len(elem.get_text())
+            link_count = len(elem.find_all("a"))
+            if text_len > 4000 and link_count > 40:
+                elem.decompose()
+        except Exception:
+            pass
+
     # Also remove the section divs that wrap reference lists — but NOT the main container
     for div in list(soup.find_all("div")):
         elem_class = div.get("class") or []
@@ -222,7 +256,9 @@ def _html_to_text(html: str) -> str:
 
     for element in soup.find_all(["p", "li", "h2", "h3", "h4", "div"]):
         tag = element.name.lower()
-        text = element.get_text(strip=True)
+        # separator=" " inserts a space between inline elements so we don't
+        # get concatenated text like "avanityitem" instead of "a vanity item"
+        text = element.get_text(separator=" ", strip=True)
 
         if not text or len(text) < 2:
             continue

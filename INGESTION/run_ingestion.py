@@ -16,6 +16,7 @@ Options:
 
 import argparse
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -50,6 +51,10 @@ from INGESTION.indexer import (
 
 logger = logging.getLogger("run_ingestion")
 
+# Version changelog pages like "1.0", "1.0.1", "1.2.4.1" are patch notes that
+# match many gameplay queries but provide no useful hints.
+_VERSION_PAGE_RE = re.compile(r"^\d+\.\d+(\.\d+)*$")
+
 
 def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
@@ -62,7 +67,7 @@ def run_full_ingestion(
     resume: bool = True,
     limit: int = 0,
     verbose: bool = False,
-    fetch_mode: str = "wikitext",
+    fetch_mode: str = "html",
     re_ingest: bool = False,
 ) -> None:
     """
@@ -120,6 +125,9 @@ def run_full_ingestion(
     logger.info(f"Found {total_pages} pages to process. "
                 f"({indexed_pages.__len__()} already indexed, "
                 f"{total_pages - len(indexed_pages)} to process)")
+
+    # Filter out version changelog pages (low-value for gameplay queries)
+    all_pages = [p for p in all_pages if not _VERSION_PAGE_RE.match(p.title)]
 
     # Filter out already-indexed pages if resuming
     # Note: --re-ingest overrides resume to force re-processing all pages
@@ -282,8 +290,6 @@ def run_preview(limit: int = 10, fetch_mode: str = "wikitext") -> None:
         if len(chunks) > 3:
             print(f"  ... and {len(chunks) - 3} more chunks")
 
-        collected += 1
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Terraria RAG — Ingestion Pipeline")
@@ -300,11 +306,11 @@ def main() -> None:
     parser.add_argument(
         "--fetch-mode",
         choices=["wikitext", "html"],
-        default="wikitext",
+        default="html",
         help=(
-            '"wikitext" (default): MediaWiki API — fast but templates like '
-            '{{recipes}} are unexpanded. '
-            '"html": Scrapling — fully rendered pages with crafting recipes.'
+            '"html" (default): MediaWiki rendered HTML — templates expanded, '
+            'crafting recipes included. '
+            '"wikitext": MediaWiki API — fast but {{recipe}} templates unexpanded.'
         ),
     )
     parser.add_argument(

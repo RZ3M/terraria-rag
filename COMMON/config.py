@@ -43,7 +43,10 @@ FETCH_MIN_PAGE_LENGTH = 500     # skip pages shorter than this
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
-CHUNK_MAX_TOKENS = 512          # hard cap on tokens per chunk
+CHUNK_MAX_TOKENS = 200          # hard cap on tokens per chunk
+# NOTE: all-MiniLM-L6-v2 has max_seq_length=256 actual tokens. With the rough
+# len(text)//4 estimator, 200 "tokens" ≈ 800 chars ≈ ~200 real tokens, leaving
+# headroom for the model's [CLS]/[SEP] tokens and tokenization overhead.
 CHUNK_OVERLAP_TOKENS = 50       # overlap between consecutive chunks
 CHUNK_HTML_STRIP = True        # strip HTML tags from plain-text chunks
 
@@ -96,7 +99,7 @@ PAYLOAD_INDEX_FIELDS = [
 # ---------------------------------------------------------------------------
 TOP_K = 10                      # vectors to retrieve from Qdrant
 RETRIEVE_K = 5                  # chunks to pass to LLM (post-rerank if used)
-RETRIEVAL_SCORE_THRESHOLD = 0.3  # minimum cosine similarity to include
+RETRIEVAL_SCORE_THRESHOLD = 0.4  # minimum cosine similarity to include
 
 # Reranker (optional — set to None to disable)
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"

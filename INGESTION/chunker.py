@@ -23,7 +23,10 @@ from COMMON.config import (
     CHUNK_HTML_STRIP,
 )
 from COMMON.types import WikiChunk, WikiPage
-from INGESTION.parser import ParsedSection, parse_wiki_page, infer_category
+from INGESTION.parser import (
+    ParsedSection, parse_wiki_page,
+    infer_category, infer_game_mode, infer_obtain_method,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +161,17 @@ def _chunk_sections(
         logger.debug(f"No sections parsed for page: {wiki_title}")
         return []
 
-    category, subcategory = infer_category(wiki_title, page_content)
+    # Build a plain-text sample from the first few sections for metadata inference.
+    # For HTML pages, page_content is raw HTML markup — the actual text is buried
+    # inside it. Using parsed section text gives much better signal.
+    section_text_sample = " ".join(
+        s.content_text for s in sections[:5] if s.content_text
+    )[:5000]
+    inference_text = section_text_sample or page_content[:5000]
+
+    category, subcategory = infer_category(wiki_title, inference_text)
+    game_mode = infer_game_mode(inference_text)
+    obtain_method = infer_obtain_method(inference_text)
 
     chunks: list[WikiChunk] = []
     chunk_index = 0
@@ -184,6 +197,8 @@ def _chunk_sections(
                 raw_html=section.content_html if not CHUNK_HTML_STRIP else "",
                 category=category,
                 subcategory=subcategory,
+                game_mode=game_mode,
+                obtain_method=obtain_method,
                 tokens_estimate=section_tokens,
             ))
             chunk_index += 1
@@ -195,6 +210,8 @@ def _chunk_sections(
                 wiki_url,
                 category,
                 subcategory,
+                game_mode,
+                obtain_method,
                 chunk_index,
             )
             chunks.extend(section_chunks)
@@ -210,6 +227,8 @@ def _split_by_paragraph(
     wiki_url: str,
     category: str,
     subcategory: str,
+    game_mode: list[str],
+    obtain_method: str,
     start_index: int,
 ) -> list[WikiChunk]:
     """
@@ -241,6 +260,8 @@ def _split_by_paragraph(
             raw_html="",
             category=category,
             subcategory=subcategory,
+            game_mode=game_mode,
+            obtain_method=obtain_method,
             tokens_estimate=_estimate_tokens(content),
         )
 
@@ -249,10 +270,11 @@ def _split_by_paragraph(
 
         if para_tokens > CHUNK_MAX_TOKENS:
             sentence_chunks = _split_by_sentence(
-                para, section, wiki_title, wiki_url, category, subcategory, chunk_idx
+                para, section, wiki_title, wiki_url, category, subcategory,
+                game_mode, obtain_method, chunk_idx
             )
-            chunks.append(sentence_chunks)
-            chunk_idx += 1
+            chunks.extend(sentence_chunks)
+            chunk_idx += len(sentence_chunks)
             current_chunk_parts = []
             current_token_count = 0
         elif current_token_count + para_tokens <= CHUNK_MAX_TOKENS:
@@ -264,8 +286,10 @@ def _split_by_paragraph(
                 chunk_idx += 1
 
             if CHUNK_OVERLAP_TOKENS > 0 and current_chunk_parts:
-                overlap_text = " ".join(current_chunk_parts)
-                overlap_tokens = _estimate_tokens(overlap_text)
+                # Accumulate overlap from the END of the previous chunk.
+                # Start at 0 and add parts until we hit the overlap budget.
+                # (Previously started at full chunk size, so budget was always exceeded.)
+                overlap_tokens = 0
                 overlap_parts: list[str] = []
                 for part in reversed(current_chunk_parts):
                     part_tokens = _estimate_tokens(part)
@@ -297,11 +321,13 @@ def _split_by_sentence(
     wiki_url: str,
     category: str,
     subcategory: str,
+    game_mode: list[str],
+    obtain_method: str,
     start_index: int,
-) -> WikiChunk:
+) -> list[WikiChunk]:
     """
     Split a very large paragraph by sentence boundaries.
-    Returns a single chunk (caller handles iteration if more are needed).
+    Returns ALL resulting chunks (previously only returned chunks[0]).
     """
     sentences = re.split(r"(?<=[.!?])\s+", text)
 
@@ -326,6 +352,8 @@ def _split_by_sentence(
                     raw_html="",
                     category=category,
                     subcategory=subcategory,
+                    game_mode=game_mode,
+                    obtain_method=obtain_method,
                     tokens_estimate=current_tokens,
                 ))
                 idx += 1
@@ -342,19 +370,28 @@ def _split_by_sentence(
             raw_html="",
             category=category,
             subcategory=subcategory,
+            game_mode=game_mode,
+            obtain_method=obtain_method,
             tokens_estimate=current_tokens,
         ))
 
-    return chunks[0] if chunks else WikiChunk(
-        wiki_title=wiki_title,
-        wiki_url=wiki_url,
-        section_path=section.path,
-        chunk_index=start_index,
-        content=text[: CHUNK_MAX_TOKENS * 4],
-        category=category,
-        subcategory=subcategory,
-        tokens_estimate=CHUNK_MAX_TOKENS,
-    )
+    if not chunks:
+        # Fallback: hard-truncate to fit model
+        chunks = [WikiChunk(
+            wiki_title=wiki_title,
+            wiki_url=wiki_url,
+            section_path=section.path,
+            chunk_index=start_index,
+            content=text[: CHUNK_MAX_TOKENS * 4],
+            raw_html="",
+            category=category,
+            subcategory=subcategory,
+            game_mode=game_mode,
+            obtain_method=obtain_method,
+            tokens_estimate=CHUNK_MAX_TOKENS,
+        )]
+
+    return chunks
 
 
 def _estimate_tokens(text: str) -> int:

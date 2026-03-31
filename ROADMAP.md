@@ -14,39 +14,19 @@ Terraria RAG is a local-first Retrieval Augmented Generation system for the Terr
 
 ---
 
-## 🚨 Key Issue: Missing Crafting Recipes
-
-**Problem:** The MediaWiki API returns raw wikitext with UNEXPANDED templates like
-`{{recipes|result=Terra Blade}}` — no actual crafting ingredients are included.
-The 3,694 pages already indexed have full text/stats but NO recipe data.
-
-**Two solutions built:**
-
-1. **`html_fetcher.py`** — Scrapling (stealthy browser, bypasses anti-bot) → rendered HTML
-   with full crafting trees and ingredients. Tested on Terra Blade ✅
-2. **`parser_html.py`** — MediaWiki `action=parse&prop=text` endpoint → also renders
-   recipes in HTML (227KB HTML for Terra Blade, includes True Night's Edge etc.)
-   Tested ✅
-
-**Neither is integrated into run_ingestion.py yet.** This is the main TODO to finish
-Milestone 2 and fill in the missing recipe content.
-
----
-
 ## 🎯 Goals
 
-1. **Ingest** the entire Terraria wiki — with full crafting recipe data
-2. **Index** wiki content in Qdrant with rich metadata filtering
-3. **Query** at runtime with game-state-aware retrieval
-4. **Generate** contextual hints via Minimax M2.7 / OpenRouter LLMs
-5. **Integrate** as a tModLoader mod with an NPC companion
+1. **Ingest** the entire Terraria wiki — with full crafting recipe data ✅
+2. **Index** wiki content in Qdrant with rich metadata filtering ✅
+3. **Query** at runtime with game-state-aware retrieval ✅
+4. **Generate** contextual hints via Minimax M2.7 / OpenRouter LLMs ✅
+5. **Integrate** as a tModLoader mod with an NPC companion 🚧
 
 ---
 
 ## 🚀 Milestones
 
 ### ✅ Milestone 1 — Project Foundation *(COMPLETE)*
-**Goal:** Scaffold the project with full architecture documented.
 
 - [x] Project structure (COMMON, INGESTION, QUERY, CHATBOT, MOD, TESTS)
 - [x] SPEC.md — architecture, design decisions, chunking strategy
@@ -57,51 +37,66 @@ Milestone 2 and fill in the missing recipe content.
 
 ---
 
-### 🚧 Milestone 2 — Ingestion Pipeline *(~75% — needs recipe re-ingest)*
-**Goal:** Fetch all wiki pages with full crafting data, chunk semantically, embed, index in Qdrant.
+### ✅ Milestone 2 — Ingestion Pipeline *(COMPLETE — 2026-03-31)*
 
-**Progress:** 3,694 pages indexed (10,761 chunks) but MISSING crafting recipe content.
+**3,671 pages, 22,005 chunks, HTML mode, crafting recipes included.**
 
-#### Ingestion Components
+#### Components
 - [x] `INGESTION/fetcher.py` — MediaWiki API, paginated fetching, caching
-- [x] `INGESTION/html_fetcher.py` — Scrapling-based HTML fetcher for rendered pages
-  (crafting recipes, infobox stats) ✅ tested
-- [x] `INGESTION/parser_html.py` — BeautifulSoup parser for MediaWiki rendered HTML ✅
-- [x] `INGESTION/parser.py` — wikitext → structured sections
-- [x] `INGESTION/chunker.py` — semantic chunking by heading + paragraph
+- [x] `INGESTION/html_fetcher.py` — Scrapling-based HTML fetcher (backup)
+- [x] `INGESTION/parser_html.py` — BeautifulSoup parser for rendered HTML (default)
+- [x] `INGESTION/parser.py` — wikitext parser (fallback mode)
+- [x] `INGESTION/chunker.py` — semantic chunking, bug fixes applied (2026-03-31)
 - [x] `INGESTION/embedder.py` — sentence-transformer batch embedding
 - [x] `INGESTION/indexer.py` — Qdrant upsert with resume support
-- [x] `INGESTION/run_ingestion.py` — orchestrator with --resume, --limit, --preview
+- [x] `INGESTION/run_ingestion.py` — orchestrator with --resume, --limit, --preview, --fetch-mode
+- [x] Default fetch mode is now `html` (MediaWiki rendered — templates expanded, recipes included)
+- [x] Version changelog pages filtered (1.0, 1.0.1, etc.)
+- [x] Metadata inference: `category`, `game_mode`, `obtain_method` now populated
 
-#### Setup Scripts
-- [x] `SCRIPTS/setup_qdrant.sh` — download + start Qdrant v1.17
-- [x] `SCRIPTS/download_embeddings.sh` — download sentence-transformer models
-- [x] `SCRIPTS/run_full_ingestion.sh` — background ingestion wrapper
-
-#### Validation
-- [ ] **Integrate html_fetcher/parser_html into run_ingestion.py** ← PRIMARY TODO
-- [ ] Re-ingest recipe-bearing pages (weapons, armor, tools, accessories, etc.)
-- [ ] Write `TESTS/test_fetcher.py`
-- [ ] Write `TESTS/test_integration.py`
-
----
-
-### ✅ Milestone 3 — Query & Retrieval *(COMPLETE)*
-**Goal:** Full query pipeline with game state filtering.
-
-- [x] `QUERY/retriever.py` — Qdrant retrieval with metadata filtering ✅
-- [x] `QUERY/prompter.py` — prompt construction from chunks + game state ✅
-- [x] `QUERY/query_engine.py` — full pipeline: embed → retrieve → generate ✅
-- [x] `QUERY/reranker.py` — optional cross-encoder re-ranking *(deferred)*
-- [x] `CHATBOT/cli.py` — interactive CLI chatbot for testing ✅
-- [ ] Write `TESTS/test_retriever.py`
-- [ ] Smoke test: query with no filters → verify results ✅ (verified 2026-03-30)
-- [ ] Smoke test: query with game_mode=Hardmode filter → verify filtering
+#### Bugs Fixed (2026-03-31)
+- [x] `_split_by_sentence` was returning only first chunk (silent content loss)
+- [x] Chunk overlap logic was broken (never added any overlap)
+- [x] `CHUNK_MAX_TOKENS=512` exceeded model's 256-token limit → reduced to 200
+- [x] Missing spaces in wikitext link stripping ("aHardmodebroadsword" → "a Hardmode broadsword")
+- [x] `_normalize_whitespace` destroyed paragraph boundaries (now preserves `\n\n`)
+- [x] Navbox/navigation template pollution — added nav-class, role, size heuristics to `_remove_noise`
+- [x] `get_text(strip=True)` concatenated inline elements — fixed to `get_text(separator=" ")`
 
 ---
 
-### 🚧 Milestone 4 — tModLoader Mod Integration *(stubs done)*
-**Goal:** Functional NPC companion inside Terraria.
+### ✅ Milestone 3 — Query & Retrieval *(COMPLETE — bugs fixed 2026-03-31)*
+
+**Retrieval quality: recall@5=81.8%, content-recall@5=95.5%, MRR=0.629**
+
+#### Components
+- [x] `QUERY/retriever.py` — Qdrant retrieval with section quality re-ranking
+- [x] `QUERY/query_expander.py` — query expansion (capped at 8 terms to avoid dilution)
+- [x] `QUERY/prompter.py` — prompt construction from chunks + game state
+- [x] `QUERY/query_engine.py` — full pipeline: embed → retrieve → generate
+- [x] `CHATBOT/cli.py` — interactive CLI chatbot
+- [x] Cross-encoder reranker (`ms-marco-MiniLM-L-6-v2`) — enabled and wired in
+
+#### Bugs Fixed (2026-03-31)
+- [x] `SKIP_WORDS` case mismatch — Title-case set compared against lowercased words (never matched)
+- [x] `WEAPON_CATS` tuple keys — `("ranged",)` never matched string `"ranged"` (dead code)
+- [x] `expand_query()` called twice in `retrieve()` — unconditional second call ignored the flag
+- [x] Query expansion appended 30-50 terms — diluted embeddings rather than improving them (capped at 8)
+- [x] `textwrap.fill()` in prompter destroyed table/recipe/list structure
+- [x] `format_hint_response()` capped at 500 chars — too short for crafting/strategy answers (→ 1500)
+- [x] `GameState.to_filter_dict()` produced MongoDB-style operators that `query_engine.py` parsed lossily
+- [x] Score threshold 0.3 too permissive (→ 0.4)
+- [x] Cross-encoder reranker was configured in config but never instantiated or called
+
+#### Evaluation Infrastructure
+- [x] `TESTS/eval_queries.py` — 22 golden test cases (item lookup, crafting, boss, stats, progression, biome, NPC)
+- [x] `TESTS/eval_retrieval.py` — automated scorer (recall@K, MRR, content-hit, per-category)
+- [x] Baseline saved: `DATA/eval_baseline.json` (pre-fix: 77.3%/68.2%/MRR=0.600)
+- [x] Final saved: `DATA/eval_final.json` (post-fix: 81.8%/95.5%/MRR=0.629)
+
+---
+
+### 🚧 Milestone 4 — tModLoader Mod Integration *(stubs done, ~20%)*
 
 - [x] `MOD/TerrariaRAG.cs` — tModLoader entry point (stub)
 - [x] `MOD/NPCCompanion.cs` — NPC dialog system, hint button (stub)
@@ -113,17 +108,17 @@ Milestone 2 and fill in the missing recipe content.
 
 ---
 
-### 🚧 Milestone 5 — Polish & Release *(partial)*
-**Goal:** Production-ready, documented, releaseable.
+### 🚧 Milestone 5 — Polish & Release *(~25%)*
 
 - [x] `TESTS/test_chunker.py` — chunker unit tests
+- [x] `TESTS/eval_queries.py` + `TESTS/eval_retrieval.py` — retrieval quality evaluation
+- [ ] `TESTS/test_fetcher.py`
+- [ ] `TESTS/test_integration.py`
+- [ ] `TESTS/test_retriever.py`
 - [ ] Error handling & retry logic (tenacity) across all HTTP calls
 - [ ] Ingestion progress bar + ETA
-- [ ] Logging setup (`structlog` or standard logging)
-- [ ] Update frequency strategy (wiki changes infrequently)
-- [ ] Offline mode: can the full pipeline run without internet?
-- [ ] Context window management: if game state + chunks exceed limit
-- [ ] README: full documentation with screenshots
+- [ ] Context window management: if game state + chunks exceed LLM limit
+- [ ] README: screenshots and demo
 - [ ] PyPI package / mod release workflow
 - [ ] License file (MIT)
 
@@ -131,15 +126,15 @@ Milestone 2 and fill in the missing recipe content.
 
 ## 🔮 Future Ideas (Backlog)
 
-- [ ] Cross-encoder reranker for better relevance
-- [ ] Embedding model comparison: MiniLM vs MPNet vs domain-specific
+- [ ] Embedding model upgrade: `all-mpnet-base-v2` (768d, 512-token limit) — would allow larger chunks
 - [ ] Multi-language support (other Terraria wikis) — currently EN only
 - [ ] Voice TTS for NPC dialog (ElevenLabs)
 - [ ] Discord bot interface
 - [ ] Web UI for the chatbot
-- [ ] Streaming LLM responses for longer hints
+- [ ] Streaming LLM responses
 - [ ] Conversation memory / multi-turn dialog with NPC
 - [ ] Player-specific hint history (avoid repeating hints)
+- [ ] Category query support — "best pre-hardmode bows" type queries need guide pages or aggregation
 
 ---
 
@@ -148,27 +143,21 @@ Milestone 2 and fill in the missing recipe content.
 | Milestone | Status | Completion |
 |-----------|--------|-----------|
 | 1 — Foundation | ✅ Complete | 100% |
-| 2 — Ingestion | 🚧 In Progress | ~75% (needs recipe re-ingest) |
+| 2 — Ingestion | ✅ Complete | 100% |
 | 3 — Query & Retrieval | ✅ Complete | 100% |
 | 4 — Mod Integration | 🚧 Stubs Done | ~20% |
-| 5 — Polish & Release | 🚧 Partial | ~15% |
+| 5 — Polish & Release | 🚧 Partial | ~25% |
 
 ---
 
-## 🗺️ Project Board
+## 📁 Data Summary (as of 2026-03-31)
 
-Track progress on GitHub: https://github.com/users/RZ3M/projects/1
-
----
-
-## 📁 Data Summary (as of 2026-03-30)
-
-- **Qdrant collection:** `terraria_wiki` — GREEN, 10,761 chunks, 384-dim vectors
-- **Raw pages cached:** ~3,694 in `DATA/raw_pages/`
-- **Chunks on disk:** 3,694 JSONL files in `DATA/chunks/`
-- **Ingestion state:** `DATA/ingestion_state.json` (checkpoint for --resume)
-- **Wiki coverage:** All English pages (namespaces=[0]), no redirects, no language variants
+- **Qdrant collection:** `terraria_wiki` — 22,005 chunks, 384-dim vectors (cosine, HNSW)
+- **Raw pages cached:** ~3,771 JSON files in `DATA/raw_pages/` (HTML mode cache)
+- **Ingestion mode:** HTML (`action=parse&prop=text`) — templates rendered, crafting recipes included
+- **Wiki coverage:** All English pages (namespaces=[0]), no redirects, no language variants, no version changelogs
+- **Eval results:** `DATA/eval_baseline.json`, `DATA/eval_phase1.json`, `DATA/eval_final.json`
 
 ---
 
-*Last updated: 2026-03-30*
+*Last updated: 2026-03-31*
